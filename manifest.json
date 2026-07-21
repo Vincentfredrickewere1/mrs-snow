@@ -1,0 +1,150 @@
+{
+  "name": "SpeechBridge - STT & TTS",
+  "short_name": "SpeechBridge",
+  "id": "speechbridge-translate",
+  "description": "Speech to Text & Text to Speech accessibility tool for deaf and mute. Works offline for TTS, text editing, and saved transcripts.",
+  "start_url": "/translate.html",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "portrait",
+  "background_color": "#f0f4f8",
+  "theme_color": "#2563eb",
+  "categories": ["utilities", "accessibility", "productivity"],
+  "lang": "en-US",
+  "dir": "ltr",
+  "icons": [
+    {
+      "src": "/icons/icon-72x72.png",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-96x96.png",
+      "sizes": "96x96",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-128x128.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-144x144.png",
+      "sizes": "144x144",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-152x152.png",
+      "sizes": "152x152",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-384x384.png",
+      "sizes": "384x384",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512x512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/screenshot-mobile.png",
+      "sizes": "1080x1920",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Home screen with live transcript"
+    },
+    {
+      "src": "/screenshots/screenshot-desktop.png",
+      "sizes": "3200x1800",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "SpeechBridge on desktop"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "New Transcript",
+      "short_name": "New",
+      "description": "Start a fresh voice-to-text session",
+      "url": "/translate.html?action=new",
+      "icons": [
+        {
+          "src": "/icons/shortcut-new-96x96.png",
+          "sizes": "96x96",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "History",
+      "short_name": "History",
+      "description": "View past transcripts",
+      "url": "/history.html",
+      "icons": [
+        {
+          "src": "/icons/shortcut-history-96x96.png",
+          "sizes": "96x96",
+          "type": "image/png"
+        }
+      ]
+    }
+  ],
+  "share_target": {
+    "action": "/share",
+    "method": "POST",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
+  "file_handlers": [
+    {
+      "action": "/import-text",
+      "accept": {
+        "text/plain": [".txt"]
+      }
+    }
+  ],
+  "protocol_handlers": [
+    {
+      "protocol": "web+speechbridge",
+      "url": "/translate.html?q=%s"
+    }
+  ],
+  "note_taking": {
+    "new_note_url": "/translate.html?action=new"
+  },
+  "edge_side_panel": {
+    "preferred_width": 400
+  },
+  "prefer_related_applications": false
+}
