@@ -11,7 +11,7 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="description" content="SpeechBridge - Offline Speech to Text & Text to Speech for Deaf & Mute Accessibility">
     <title>SpeechBridge • STT & TTS</title>
-	<link rel="manifest" href="/manifest.json">
+    <link rel="manifest" href="/manifest.json">
 
     <!-- PWA Manifest (blob-based for offline) -->
     <script>
@@ -535,6 +535,11 @@
         }
         .main-textarea::placeholder {
             color: #cbd5e1;
+        }
+        .main-textarea.listening-placeholder::placeholder {
+            color: #3b82f6;
+            font-weight: 500;
+            opacity: 0.7;
         }
         .word-count {
             text-align: right;
@@ -1106,16 +1111,16 @@
 
         <!-- MAIN CARD -->
         <div class="main-card">
-            <!-- Interim display (kept for visual feedback) -->
+            <!-- Interim display (shows live transcription hint) -->
             <div class="interim-display" id="interimDisplay" aria-live="assertive">
                 <span class="live-badge">● LIVE</span>
                 <span id="interimText">Speak to see real-time transcription here...</span>
             </div>
 
-            <!-- Text area (now gets live typing) -->
+            <!-- Text area — live words appear here as you speak -->
             <div class="text-area-container">
                 <textarea class="main-textarea" id="mainTextarea"
-            placeholder="Your transcript will appear here... You can also type or edit text manually."
+            placeholder="Your transcript will appear here live as you speak… You can also type or edit text manually."
             aria-label="Transcript text area"></textarea>
                 <div class="word-count" id="wordCount">Words: 0 | Characters: 0</div>
             </div>
@@ -1236,10 +1241,14 @@
             let isOnline = navigator.onLine;
             // Duplication prevention: indices of final results already added
             let processedFinalIndices = new Set();
-            // Live typing: stable transcript (only final, no duplication)
+            // Stable transcript (final, confirmed text)
             let stableTranscript = '';
-            // Current interim string (not yet final)
+            // Current interim (live, not-yet-final text)
             let currentInterim = '';
+            // Flag to track if user manually typed
+            let userTypedSinceLastRecognition = false;
+            // Timeout to sync stableTranscript after user types
+            let typeSyncTimeout = null;
 
             // ============ INITIALIZATION ============
             function init() {
@@ -1277,7 +1286,6 @@
             }
 
             function setupPwaListeners() {
-                // Listen for install prompt
                 window.addEventListener('beforeinstallprompt', (e) => {
                     e.preventDefault();
                     deferredPrompt = e;
@@ -1305,7 +1313,6 @@
                         showToast('💡 Use browser menu → "Add to Home Screen"', 'success');
                     }
                 });
-                // Online/offline events
                 window.addEventListener('online', () => {
                     isOnline = true;
                     updateOnlineBadge();
@@ -1337,14 +1344,18 @@
                 recognition.onstart = () => {
                     isListening = true;
                     isSpeechDetected = false;
+                    userTypedSinceLastRecognition = false;
                     updateListenButtons();
                     setStatus('listening', '👂 Listening... Speak now!');
                     visualizer.classList.add('active');
                     interimDisplay.classList.remove('active');
                     interimText.textContent = 'Waiting for speech...';
-                    // Don't clear stableTranscript; keep previous text if any
+                    // Keep stableTranscript intact; don't clear it
                     currentInterim = '';
                     refreshTextarea();
+                    // Add a visual cue in the textarea placeholder
+                    mainTextarea.classList.add('listening-placeholder');
+                    mainTextarea.placeholder = '🎙️ Listening... Speak and words will appear live here!';
                 };
 
                 recognition.onend = () => {
@@ -1353,6 +1364,8 @@
                     updateListenButtons();
                     visualizer.classList.remove('active');
                     interimDisplay.classList.remove('active');
+                    mainTextarea.classList.remove('listening-placeholder');
+                    mainTextarea.placeholder = 'Your transcript will appear here live as you speak… You can also type or edit text manually.';
                     // Clear any remaining interim on stop
                     currentInterim = '';
                     refreshTextarea();
@@ -1400,7 +1413,7 @@
                     for (let i = event.resultIndex; i < event.results.length; i++) {
                         const result = event.results[i];
                         if (result.isFinal && !processedFinalIndices.has(i)) {
-                            // Noise filter: confidence >= 0.7
+                            // Confidence filter: >= 0.7 for final results
                             if (result[0].confidence >= 0.7) {
                                 newFinalText += result[0].transcript;
                                 newFinalIndices.push(i);
@@ -1411,10 +1424,17 @@
                     }
 
                     if (newFinalText.trim()) {
-                        // Append to stable transcript with proper spacing
-                        const separator = stableTranscript.trim() ? ' ' : '';
-                        stableTranscript += separator + newFinalText.trim();
-                        // Mark indices as processed
+                        // If user typed manually, respect that as the base
+                        if (userTypedSinceLastRecognition) {
+                            // Stable transcript already reflects the textarea content
+                            // Just append new final text
+                            const separator = stableTranscript.trim() ? ' ' : '';
+                            stableTranscript += separator + newFinalText.trim();
+                            userTypedSinceLastRecognition = false;
+                        } else {
+                            const separator = stableTranscript.trim() ? ' ' : '';
+                            stableTranscript += separator + newFinalText.trim();
+                        }
                         newFinalIndices.forEach(idx => processedFinalIndices.add(idx));
                         // Clear interim because final result should replace any overlapping interim
                         currentInterim = '';
@@ -1422,7 +1442,7 @@
                         flashVisualizer();
                     }
 
-                    // Gather interim transcript from all non-final results
+                    // Gather interim transcript from all non-final results (LIVE!)
                     let newInterim = '';
                     for (let i = event.resultIndex; i < event.results.length; i++) {
                         const result = event.results[i];
@@ -1437,14 +1457,18 @@
                         interimText.textContent = currentInterim;
                         if (!isSpeechDetected) {
                             isSpeechDetected = true;
-                            setStatus('speech-detected', '🔊 Speech detected! Transcribing...');
+                            setStatus('speech-detected', '🔊 Speech detected! Transcribing live...');
                             visualizer.classList.add('active');
                         }
                         animateBarsRandomly();
                     } else {
-                        // If no new interim, keep whatever we had (or clear if final arrived)
-                        if (!newFinalText.trim()) {
-                            // No final and no interim: may be a pause
+                        // No new interim — if we had interim, clear it
+                        if (currentInterim && !newFinalText.trim()) {
+                            // Just a pause, keep the interim as is or clear?
+                            // Let's keep it until final arrives or a new interim comes
+                        }
+                        if (!newFinalText.trim() && !newInterim) {
+                            // No speech detected
                             if (isSpeechDetected) {
                                 isSpeechDetected = false;
                                 if (isListening) {
@@ -1452,17 +1476,21 @@
                                 }
                             }
                             interimDisplay.classList.remove('active');
-                            interimText.textContent = 'Waiting for more speech...';
+                            if (!stableTranscript.trim()) {
+                                interimText.textContent = 'Waiting for speech...';
+                            } else {
+                                interimText.textContent = 'Speak to add more text...';
+                            }
                         }
                     }
 
-                    // Update the textarea with stable + interim for live typing effect
+                    // 🔥 CRITICAL: Update the textarea with stable + interim (LIVE TYPING EFFECT)
                     refreshTextarea();
                 };
 
                 recognition.onspeechstart = () => {
                     isSpeechDetected = true;
-                    setStatus('speech-detected', '🔊 Speech detected! Transcribing...');
+                    setStatus('speech-detected', '🔊 Speech detected! Transcribing live...');
                     visualizer.classList.add('active');
                     interimDisplay.classList.add('active');
                 };
@@ -1472,13 +1500,24 @@
                     if (isListening) {
                         setStatus('listening', '👂 Listening... processing...');
                     }
-                    interimDisplay.classList.remove('active');
+                    // Keep interim display active if we have interim text
+                    if (!currentInterim) {
+                        interimDisplay.classList.remove('active');
+                    }
                 };
             }
 
+            // ============ CORE: refresh the textarea with live text ============
             function refreshTextarea() {
-                const combined = stableTranscript + (currentInterim ? ' ' + currentInterim : '');
+                // Combine stable transcript + live interim
+                let combined = stableTranscript;
+                if (currentInterim && currentInterim.trim()) {
+                    const separator = combined.trim() ? ' ' : '';
+                    combined += separator + currentInterim.trim();
+                }
                 mainTextarea.value = combined;
+                // Update word count based on the full text
+                updateWordCount();
             }
 
             function setupSpeechSynthesis() {
@@ -1534,7 +1573,39 @@
                 btnSpeak.addEventListener('click', speakText);
                 btnStopSpeak.addEventListener('click', stopSpeaking);
                 btnClearHistory.addEventListener('click', clearAllHistory);
-                mainTextarea.addEventListener('input', updateWordCount);
+
+                // When user types manually, sync stableTranscript to match
+                mainTextarea.addEventListener('input', function() {
+                    // If listening, we need to handle manual typing carefully
+                    const currentValue = mainTextarea.value;
+                    // If we have interim text, we need to separate it from stable
+                    if (currentInterim && isListening) {
+                        // Try to find the stable part by removing interim from the end
+                        // This is heuristic — if the text ends with the interim text
+                        if (currentValue.endsWith(currentInterim)) {
+                            const stablePart = currentValue.slice(0, -currentInterim.length).trim();
+                            stableTranscript = stablePart;
+                        } else {
+                            // The user modified the text in a way that breaks the interim
+                            // Just use the whole value as stable
+                            stableTranscript = currentValue;
+                            currentInterim = '';
+                            interimDisplay.classList.remove('active');
+                        }
+                    } else {
+                        // Not listening or no interim — stable is the whole value
+                        stableTranscript = currentValue;
+                    }
+                    // Trim trailing spaces
+                    stableTranscript = stableTranscript.trimEnd();
+                    // Update word count
+                    updateWordCount();
+                    // Mark that user typed
+                    userTypedSinceLastRecognition = true;
+                    // Clear type sync timeout
+                    if (typeSyncTimeout) clearTimeout(typeSyncTimeout);
+                });
+
                 rateRange.addEventListener('input', () => {
                     rateValue.textContent = parseFloat(rateRange.value).toFixed(1) + '×';
                 });
@@ -1575,7 +1646,6 @@
                     showToast(
                         '⚠️ You are offline. Speech recognition may not work without internet.',
                         'error');
-                    // Still try - some devices have on-device recognition
                 }
                 if (isTtsSpeaking) {
                     stopSpeaking();
@@ -1588,22 +1658,27 @@
             function _doStartListening() {
                 // Reset processed final indices for a fresh recognition session
                 processedFinalIndices.clear();
-                // Do NOT clear stableTranscript; user may have typed or previous text
+                // Don't clear stableTranscript — keep previous text
                 currentInterim = '';
                 refreshTextarea();
                 try {
                     recognition.start();
                     isListening = true;
                     recognitionWasPausedForTts = false;
+                    userTypedSinceLastRecognition = false;
                     updateListenButtons();
                     setStatus('listening', '👂 Listening... Speak now!');
                     visualizer.classList.add('active');
+                    mainTextarea.classList.add('listening-placeholder');
+                    mainTextarea.placeholder = '🎙️ Listening... Speak and words will appear live here!';
                 } catch (e) {
                     if (e.name === 'InvalidStateError') {
                         isListening = true;
                         updateListenButtons();
                         setStatus('listening', '👂 Already listening...');
                         visualizer.classList.add('active');
+                        mainTextarea.classList.add('listening-placeholder');
+                        mainTextarea.placeholder = '🎙️ Listening... Speak and words will appear live here!';
                     } else {
                         showToast('Could not start microphone', 'error');
                         setStatus('error', '❌ Could not access microphone.');
@@ -1624,6 +1699,8 @@
                 updateListenButtons();
                 visualizer.classList.remove('active');
                 interimDisplay.classList.remove('active');
+                mainTextarea.classList.remove('listening-placeholder');
+                mainTextarea.placeholder = 'Your transcript will appear here live as you speak… You can also type or edit text manually.';
                 currentInterim = '';
                 refreshTextarea();
                 setStatus('idle', 'Ready — Tap "Start Listening" to begin');
@@ -1642,6 +1719,7 @@
                 updateListenButtons();
                 visualizer.classList.remove('active');
                 interimDisplay.classList.remove('active');
+                mainTextarea.classList.remove('listening-placeholder');
                 currentInterim = '';
                 refreshTextarea();
                 setStatus('paused-tts', '🔊 TTS playing — mic paused to prevent echo');
@@ -1650,7 +1728,6 @@
             function resumeListeningAfterTts() {
                 if (recognitionWasPausedForTts) {
                     recognitionWasPausedForTts = false;
-                    // Clear indices and interim for a new session
                     processedFinalIndices.clear();
                     currentInterim = '';
                     refreshTextarea();
@@ -1783,7 +1860,6 @@
             }
 
             function updateWordCount() {
-                // Count only stable text (or the whole textarea if manually edited)
                 const text = mainTextarea.value.trim();
                 const words = text ? text.split(/\s+/).filter(w => w.length > 0).length : 0;
                 const chars = mainTextarea.value.length;
@@ -1810,7 +1886,6 @@
                     showToast('No text to save as PDF', 'error');
                     return;
                 }
-                // Use print dialog → "Save as PDF" (works offline on all mobile browsers)
                 showToast('📕 Opening print dialog → choose "Save as PDF"', 'success');
                 const printWindow = window.open('', '_blank', 'width=700,height=900');
                 if (!printWindow) {
@@ -1878,7 +1953,6 @@ body { margin: 0; padding: 0; }
                 setTimeout(() => {
                     printWindow.focus();
                     printWindow.print();
-                    // Close after print dialog closes (approx)
                     setTimeout(() => {
                         if (printWindow && !printWindow.closed) {
                             printWindow.close();
@@ -1957,7 +2031,6 @@ body { margin: 0; padding: 0; }
                     if (mainTextarea.value.trim() && !confirm('Load this entry? Current text will be replaced.'))
                         return;
                     mainTextarea.value = item.text;
-                    // Also update stable transcript if loading
                     stableTranscript = item.text;
                     currentInterim = '';
                     updateWordCount();
@@ -2070,7 +2143,6 @@ body { margin: 0; padding: 0; }
             // ============ SERVICE WORKER REGISTRATION ============
             function registerServiceWorker() {
                 if ('serviceWorker' in navigator) {
-                    // Only register if on https or localhost (not file://)
                     if (window.location.protocol === 'https:' || window.location.hostname === 'localhost' ||
                         window.location.hostname === '127.0.0.1') {
                         const swCode = `
@@ -2115,8 +2187,8 @@ self.addEventListener('fetch', (event) => {
             registerServiceWorker();
             init();
 
-            console.log('🎙️ SpeechBridge Ready — Real-Time Typing Version');
-            console.log('💡 Speak to see words appear live in the text area.');
+            console.log('🎙️ SpeechBridge Ready — Real-Time Live Transcription');
+            console.log('💡 Speak to see words appear instantly in the text area.');
         })();
     </script>
 </body>
