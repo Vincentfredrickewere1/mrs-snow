@@ -1420,22 +1420,38 @@
                     }
                     lastResultIndex = event.results.length;
 
-                    // Append final text to stableTranscript
+                    // ---- Deduplicated final text update ----
                     if (finalAppend) {
-                        stableTranscript = (stableTranscript + ' ' + finalAppend).trim();
-                        currentInterim = ''; // final clears interim
-                        // If we have new interim from same batch, set it
-                        if (interimAccum) {
+                        const stableTrim = stableTranscript.trim();
+                        const finalTrim = finalAppend.trim();
+                        // If the final text is already at the end of stable, skip
+                        if (stableTrim && finalTrim && stableTrim.endsWith(finalTrim)) {
+                            // already present, do nothing
+                        } else if (stableTrim && finalTrim.startsWith(stableTrim)) {
+                            // Append only the new part (the difference)
+                            const newPart = finalTrim.substring(stableTrim.length).trim();
+                            if (newPart) {
+                                stableTranscript = (stableTrim + ' ' + newPart).trim();
+                            }
+                        } else {
+                            // Completely new phrase – append whole
+                            stableTranscript = (stableTrim + ' ' + finalTrim).trim();
+                        }
+                        // Final clears interim
+                        currentInterim = '';
+                        // If we have interim from the same batch, set it only if it's not the same as final
+                        if (interimAccum && !interimAccum.startsWith(finalTrim)) {
                             currentInterim = interimAccum;
                         }
                     } else {
+                        // No final, update interim
                         if (interimAccum) {
                             currentInterim = interimAccum;
                         }
                         // else keep existing interim (if any)
                     }
 
-                    // Update UI
+                    // ---- UI updates ----
                     if (finalAppend) {
                         flashVisualizer();
                         if (currentInterim) {
@@ -1475,7 +1491,7 @@
                         }
                     }
 
-                    // Render the combined text (with performance batching)
+                    // Render the combined text with batching
                     renderTranscript();
                 };
 
