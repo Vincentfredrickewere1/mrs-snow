@@ -11,7 +11,7 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="description" content="SpeechBridge - Offline Speech to Text & Text to Speech for Deaf & Mute Accessibility">
     <title>SpeechBridge • STT & TTS</title>
-    <link rel="manifest" href="/manifest.json">
+	<link rel="manifest" href="/manifest.json">
 
     <!-- PWA Manifest (blob-based for offline) -->
     <script>
@@ -535,11 +535,6 @@
         }
         .main-textarea::placeholder {
             color: #cbd5e1;
-        }
-        .main-textarea.listening-placeholder::placeholder {
-            color: #3b82f6;
-            font-weight: 500;
-            opacity: 0.7;
         }
         .word-count {
             text-align: right;
@@ -1111,16 +1106,16 @@
 
         <!-- MAIN CARD -->
         <div class="main-card">
-            <!-- Interim display (shows live transcription hint) -->
+            <!-- Interim display (kept for visual feedback) -->
             <div class="interim-display" id="interimDisplay" aria-live="assertive">
                 <span class="live-badge">● LIVE</span>
-                <span id="interimText">Speak to see real‑time transcription here…</span>
+                <span id="interimText">Speak to see real-time transcription here...</span>
             </div>
 
-            <!-- Text area — live words appear here as you speak -->
+            <!-- Text area (now gets live typing) -->
             <div class="text-area-container">
                 <textarea class="main-textarea" id="mainTextarea"
-            placeholder="Your transcript will appear here live as you speak… You can also type or edit text manually."
+            placeholder="Your transcript will appear here... You can also type or edit text manually."
             aria-label="Transcript text area"></textarea>
                 <div class="word-count" id="wordCount">Words: 0 | Characters: 0</div>
             </div>
@@ -1199,8 +1194,6 @@
 
     <script>
         (function() {
-            'use strict';
-
             // ============ DOM ELEMENTS ============
             const statusBar = document.getElementById('statusBar');
             const statusText = document.getElementById('statusText');
@@ -1241,18 +1234,12 @@
             let historyData = [];
             let deferredPrompt = null;
             let isOnline = navigator.onLine;
-
-            // Transcript state – clean separation
+            // Duplication prevention: indices of final results already added
+            let processedFinalIndices = new Set();
+            // Live typing: stable transcript (only final, no duplication)
             let stableTranscript = '';
+            // Current interim string (not yet final)
             let currentInterim = '';
-            let lastResultIndex = 0;
-
-            // Performance: update batching via requestAnimationFrame
-            let updatePending = false;
-            let lastCombinedText = '';
-
-            // Flag to prevent input event loops
-            let updatingTextarea = false;
 
             // ============ INITIALIZATION ============
             function init() {
@@ -1265,6 +1252,7 @@
                 checkOnlineStatus();
                 setupPwaListeners();
                 setTimeout(populateVoiceList, 300);
+                // Periodic voice list refresh (some browsers load voices lazily)
                 setInterval(() => {
                     const currentVoices = speechSynthesis.getVoices();
                     if (currentVoices.length !== availableVoices.length) {
@@ -1289,6 +1277,7 @@
             }
 
             function setupPwaListeners() {
+                // Listen for install prompt
                 window.addEventListener('beforeinstallprompt', (e) => {
                     e.preventDefault();
                     deferredPrompt = e;
@@ -1316,6 +1305,7 @@
                         showToast('💡 Use browser menu → "Add to Home Screen"', 'success');
                     }
                 });
+                // Online/offline events
                 window.addEventListener('online', () => {
                     isOnline = true;
                     updateOnlineBadge();
@@ -1347,16 +1337,14 @@
                 recognition.onstart = () => {
                     isListening = true;
                     isSpeechDetected = false;
-                    lastResultIndex = 0;
                     updateListenButtons();
                     setStatus('listening', '👂 Listening... Speak now!');
                     visualizer.classList.add('active');
                     interimDisplay.classList.remove('active');
                     interimText.textContent = 'Waiting for speech...';
+                    // Don't clear stableTranscript; keep previous text if any
                     currentInterim = '';
-                    renderTranscript();
-                    mainTextarea.classList.add('listening-placeholder');
-                    mainTextarea.placeholder = '🎙️ Listening... Speak and words will appear live here!';
+                    refreshTextarea();
                 };
 
                 recognition.onend = () => {
@@ -1365,10 +1353,9 @@
                     updateListenButtons();
                     visualizer.classList.remove('active');
                     interimDisplay.classList.remove('active');
-                    mainTextarea.classList.remove('listening-placeholder');
-                    mainTextarea.placeholder = 'Your transcript will appear here live as you speak… You can also type or edit text manually.';
+                    // Clear any remaining interim on stop
                     currentInterim = '';
-                    renderTranscript();
+                    refreshTextarea();
                     if (recognitionWasPausedForTts) {
                         recognitionWasPausedForTts = false;
                         setStatus('paused-tts', '⏸ TTS finished. Tap "Start Listening" to resume.');
@@ -1406,98 +1393,76 @@
                 };
 
                 recognition.onresult = (event) => {
-                    let finalAppend = '';
-                    let interimAccum = '';
+                    let newFinalText = '';
+                    let newFinalIndices = [];
 
-                    for (let i = lastResultIndex; i < event.results.length; i++) {
+                    // Process new final results (duplication-safe)
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
                         const result = event.results[i];
-                        const transcript = result[0].transcript.trim();
-                        if (result.isFinal) {
-                            finalAppend += (finalAppend ? ' ' : '') + transcript;
-                        } else {
-                            interimAccum += (interimAccum ? ' ' : '') + transcript;
+                        if (result.isFinal && !processedFinalIndices.has(i)) {
+                            // Noise filter: confidence >= 0.7
+                            if (result[0].confidence >= 0.7) {
+                                newFinalText += result[0].transcript;
+                                newFinalIndices.push(i);
+                            } else {
+                                console.log('Low confidence discarded:', result[0].transcript, result[0].confidence);
+                            }
                         }
                     }
-                    lastResultIndex = event.results.length;
 
-                    // ---- Deduplicated final text update ----
-                    if (finalAppend) {
-                        const stableTrim = stableTranscript.trim();
-                        const finalTrim = finalAppend.trim();
-                        // If the final text is already at the end of stable, skip
-                        if (stableTrim && finalTrim && stableTrim.endsWith(finalTrim)) {
-                            // already present, do nothing
-                        } else if (stableTrim && finalTrim.startsWith(stableTrim)) {
-                            // Append only the new part (the difference)
-                            const newPart = finalTrim.substring(stableTrim.length).trim();
-                            if (newPart) {
-                                stableTranscript = (stableTrim + ' ' + newPart).trim();
-                            }
-                        } else {
-                            // Completely new phrase – append whole
-                            stableTranscript = (stableTrim + ' ' + finalTrim).trim();
-                        }
-                        // Final clears interim
+                    if (newFinalText.trim()) {
+                        // Append to stable transcript with proper spacing
+                        const separator = stableTranscript.trim() ? ' ' : '';
+                        stableTranscript += separator + newFinalText.trim();
+                        // Mark indices as processed
+                        newFinalIndices.forEach(idx => processedFinalIndices.add(idx));
+                        // Clear interim because final result should replace any overlapping interim
                         currentInterim = '';
-                        // If we have interim from the same batch, set it only if it's not the same as final
-                        if (interimAccum && !interimAccum.startsWith(finalTrim)) {
-                            currentInterim = interimAccum;
-                        }
-                    } else {
-                        // No final, update interim
-                        if (interimAccum) {
-                            currentInterim = interimAccum;
-                        }
-                        // else keep existing interim (if any)
+                        updateWordCount();
+                        flashVisualizer();
                     }
 
-                    // ---- UI updates ----
-                    if (finalAppend) {
-                        flashVisualizer();
-                        if (currentInterim) {
-                            interimDisplay.classList.add('active');
-                            interimText.textContent = currentInterim;
-                            if (!isSpeechDetected) {
-                                isSpeechDetected = true;
-                                setStatus('speech-detected', '🔊 Speech detected! Transcribing live...');
-                                visualizer.classList.add('active');
-                            }
-                            animateBarsRandomly();
-                        } else {
-                            interimDisplay.classList.remove('active');
-                            if (isSpeechDetected) {
-                                isSpeechDetected = false;
-                                if (isListening) {
-                                    setStatus('listening', '👂 Listening...');
-                                }
-                            }
+                    // Gather interim transcript from all non-final results
+                    let newInterim = '';
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        const result = event.results[i];
+                        if (!result.isFinal) {
+                            newInterim += result[0].transcript;
                         }
-                    } else if (currentInterim) {
+                    }
+
+                    if (newInterim.trim()) {
+                        currentInterim = newInterim.trim();
                         interimDisplay.classList.add('active');
                         interimText.textContent = currentInterim;
                         if (!isSpeechDetected) {
                             isSpeechDetected = true;
-                            setStatus('speech-detected', '🔊 Speech detected! Transcribing live...');
+                            setStatus('speech-detected', '🔊 Speech detected! Transcribing...');
                             visualizer.classList.add('active');
                         }
                         animateBarsRandomly();
                     } else {
-                        interimDisplay.classList.remove('active');
-                        if (isSpeechDetected) {
-                            isSpeechDetected = false;
-                            if (isListening) {
-                                setStatus('listening', '👂 Listening...');
+                        // If no new interim, keep whatever we had (or clear if final arrived)
+                        if (!newFinalText.trim()) {
+                            // No final and no interim: may be a pause
+                            if (isSpeechDetected) {
+                                isSpeechDetected = false;
+                                if (isListening) {
+                                    setStatus('listening', '👂 Listening... (pause detected)');
+                                }
                             }
+                            interimDisplay.classList.remove('active');
+                            interimText.textContent = 'Waiting for more speech...';
                         }
                     }
 
-                    // Render the combined text with batching
-                    renderTranscript();
+                    // Update the textarea with stable + interim for live typing effect
+                    refreshTextarea();
                 };
 
                 recognition.onspeechstart = () => {
                     isSpeechDetected = true;
-                    setStatus('speech-detected', '🔊 Speech detected! Transcribing live...');
+                    setStatus('speech-detected', '🔊 Speech detected! Transcribing...');
                     visualizer.classList.add('active');
                     interimDisplay.classList.add('active');
                 };
@@ -1507,29 +1472,13 @@
                     if (isListening) {
                         setStatus('listening', '👂 Listening... processing...');
                     }
-                    if (!currentInterim) {
-                        interimDisplay.classList.remove('active');
-                    }
+                    interimDisplay.classList.remove('active');
                 };
             }
 
-            // ============ HIGH‑PERFORMANCE RENDER ============
-            function renderTranscript() {
-                const combined = (stableTranscript + (currentInterim ? ' ' + currentInterim : '')).trim();
-                // Only update if text actually changed
-                if (combined === lastCombinedText) return;
-                lastCombinedText = combined;
-
-                if (!updatePending) {
-                    updatePending = true;
-                    requestAnimationFrame(() => {
-                        updatePending = false;
-                        updatingTextarea = true;
-                        mainTextarea.value = combined;
-                        updatingTextarea = false;
-                        updateWordCount();
-                    });
-                }
+            function refreshTextarea() {
+                const combined = stableTranscript + (currentInterim ? ' ' + currentInterim : '');
+                mainTextarea.value = combined;
             }
 
             function setupSpeechSynthesis() {
@@ -1585,27 +1534,7 @@
                 btnSpeak.addEventListener('click', speakText);
                 btnStopSpeak.addEventListener('click', stopSpeaking);
                 btnClearHistory.addEventListener('click', clearAllHistory);
-
-                mainTextarea.addEventListener('input', function() {
-                    if (updatingTextarea) return;
-                    const currentValue = mainTextarea.value;
-                    if (isListening && currentInterim) {
-                        // Try to separate stable from interim by checking suffix
-                        if (currentValue.endsWith(currentInterim)) {
-                            const stablePart = currentValue.slice(0, -currentInterim.length).trim();
-                            stableTranscript = stablePart;
-                        } else {
-                            stableTranscript = currentValue;
-                            currentInterim = '';
-                            interimDisplay.classList.remove('active');
-                        }
-                    } else {
-                        stableTranscript = currentValue;
-                    }
-                    lastCombinedText = currentValue; // sync cache
-                    updateWordCount();
-                });
-
+                mainTextarea.addEventListener('input', updateWordCount);
                 rateRange.addEventListener('input', () => {
                     rateValue.textContent = parseFloat(rateRange.value).toFixed(1) + '×';
                 });
@@ -1618,6 +1547,7 @@
                         }
                     }
                 });
+                // Keyboard shortcuts
                 document.addEventListener('keydown', (e) => {
                     if (e.ctrlKey && e.key === 'l') {
                         e.preventDefault();
@@ -1645,6 +1575,7 @@
                     showToast(
                         '⚠️ You are offline. Speech recognition may not work without internet.',
                         'error');
+                    // Still try - some devices have on-device recognition
                 }
                 if (isTtsSpeaking) {
                     stopSpeaking();
@@ -1655,9 +1586,11 @@
             }
 
             function _doStartListening() {
-                lastResultIndex = 0;
+                // Reset processed final indices for a fresh recognition session
+                processedFinalIndices.clear();
+                // Do NOT clear stableTranscript; user may have typed or previous text
                 currentInterim = '';
-                renderTranscript();
+                refreshTextarea();
                 try {
                     recognition.start();
                     isListening = true;
@@ -1665,16 +1598,12 @@
                     updateListenButtons();
                     setStatus('listening', '👂 Listening... Speak now!');
                     visualizer.classList.add('active');
-                    mainTextarea.classList.add('listening-placeholder');
-                    mainTextarea.placeholder = '🎙️ Listening... Speak and words will appear live here!';
                 } catch (e) {
                     if (e.name === 'InvalidStateError') {
                         isListening = true;
                         updateListenButtons();
                         setStatus('listening', '👂 Already listening...');
                         visualizer.classList.add('active');
-                        mainTextarea.classList.add('listening-placeholder');
-                        mainTextarea.placeholder = '🎙️ Listening... Speak and words will appear live here!';
                     } else {
                         showToast('Could not start microphone', 'error');
                         setStatus('error', '❌ Could not access microphone.');
@@ -1695,10 +1624,8 @@
                 updateListenButtons();
                 visualizer.classList.remove('active');
                 interimDisplay.classList.remove('active');
-                mainTextarea.classList.remove('listening-placeholder');
-                mainTextarea.placeholder = 'Your transcript will appear here live as you speak… You can also type or edit text manually.';
                 currentInterim = '';
-                renderTranscript();
+                refreshTextarea();
                 setStatus('idle', 'Ready — Tap "Start Listening" to begin');
             }
 
@@ -1715,18 +1642,18 @@
                 updateListenButtons();
                 visualizer.classList.remove('active');
                 interimDisplay.classList.remove('active');
-                mainTextarea.classList.remove('listening-placeholder');
                 currentInterim = '';
-                renderTranscript();
+                refreshTextarea();
                 setStatus('paused-tts', '🔊 TTS playing — mic paused to prevent echo');
             }
 
             function resumeListeningAfterTts() {
                 if (recognitionWasPausedForTts) {
                     recognitionWasPausedForTts = false;
-                    lastResultIndex = 0;
+                    // Clear indices and interim for a new session
+                    processedFinalIndices.clear();
                     currentInterim = '';
-                    renderTranscript();
+                    refreshTextarea();
                     setTimeout(() => _doStartListening(), 400);
                 }
             }
@@ -1751,6 +1678,7 @@
 
             // ============ TTS FUNCTIONS ============
             function speakText() {
+                // Use only stable transcript (ignore interim) for TTS
                 const text = stableTranscript.trim();
                 if (!text) {
                     showToast('No text to speak. Please type or transcribe first.', 'error');
@@ -1826,10 +1754,9 @@
                 if (stableTranscript.trim() && !confirm('Clear all text in the editor?')) return;
                 stableTranscript = '';
                 currentInterim = '';
-                lastCombinedText = '';
-                renderTranscript();
+                refreshTextarea();
                 updateWordCount();
-                interimText.textContent = 'Speak to see real‑time transcription here…';
+                interimText.textContent = 'Speak to see real-time transcription here...';
                 interimDisplay.classList.remove('active');
                 showToast('Text cleared', 'success');
             }
@@ -1856,6 +1783,7 @@
             }
 
             function updateWordCount() {
+                // Count only stable text (or the whole textarea if manually edited)
                 const text = mainTextarea.value.trim();
                 const words = text ? text.split(/\s+/).filter(w => w.length > 0).length : 0;
                 const chars = mainTextarea.value.length;
@@ -1882,6 +1810,7 @@
                     showToast('No text to save as PDF', 'error');
                     return;
                 }
+                // Use print dialog → "Save as PDF" (works offline on all mobile browsers)
                 showToast('📕 Opening print dialog → choose "Save as PDF"', 'success');
                 const printWindow = window.open('', '_blank', 'width=700,height=900');
                 if (!printWindow) {
@@ -1949,6 +1878,7 @@ body { margin: 0; padding: 0; }
                 setTimeout(() => {
                     printWindow.focus();
                     printWindow.print();
+                    // Close after print dialog closes (approx)
                     setTimeout(() => {
                         if (printWindow && !printWindow.closed) {
                             printWindow.close();
@@ -2027,9 +1957,9 @@ body { margin: 0; padding: 0; }
                     if (mainTextarea.value.trim() && !confirm('Load this entry? Current text will be replaced.'))
                         return;
                     mainTextarea.value = item.text;
+                    // Also update stable transcript if loading
                     stableTranscript = item.text;
                     currentInterim = '';
-                    lastCombinedText = item.text;
                     updateWordCount();
                     showToast('📂 Entry loaded!', 'success');
                     mainTextarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2140,6 +2070,7 @@ body { margin: 0; padding: 0; }
             // ============ SERVICE WORKER REGISTRATION ============
             function registerServiceWorker() {
                 if ('serviceWorker' in navigator) {
+                    // Only register if on https or localhost (not file://)
                     if (window.location.protocol === 'https:' || window.location.hostname === 'localhost' ||
                         window.location.hostname === '127.0.0.1') {
                         const swCode = `
@@ -2184,8 +2115,8 @@ self.addEventListener('fetch', (event) => {
             registerServiceWorker();
             init();
 
-            console.log('🎙️ SpeechBridge Pro — Ultra‑fast Live Typing');
-            console.log('💡 Words appear instantly, no duplication, no lag.');
+            console.log('🎙️ SpeechBridge Ready — Real-Time Typing Version');
+            console.log('💡 Speak to see words appear live in the text area.');
         })();
     </script>
 </body>
